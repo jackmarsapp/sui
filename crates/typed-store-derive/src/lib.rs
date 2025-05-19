@@ -351,6 +351,16 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
                         #generics_names: #generics_bounds_token,
                     )*
                 > #intermediate_db_map_struct_name #generics {
+                
+                  #[allow(unused_parens)]
+            pub fn open_tables_read_only_as_rw_impl(
+                path: std::path::PathBuf,
+                metric_conf: typed_store::rocks::MetricConf,
+            ) -> Self {
+                                unimplemented!("read only mode is not supported for TideHunter");
+
+            }    
+                    
                 /// Opens a set of tables in read-write mode
                 /// If as_secondary_with_path is set, the DB is opened in read only mode with the path specified
                 pub fn open_tables_impl(
@@ -421,6 +431,13 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
                 ) -> #secondary_db_map_struct_name #generics {
                     unimplemented!("read only mode is not supported for TideHunter");
                 }
+
+                pub fn get_rw_handle_readonly_inner (
+                primary_path: std::path::PathBuf,
+                metric_conf: typed_store::rocks::MetricConf,
+                ) -> Self {
+                unimplemented!("read only mode is not supported for TideHunter");
+                }
             }
 
             pub struct #secondary_db_map_struct_name;
@@ -434,6 +451,32 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
                         #generics_names: #generics_bounds_token,
                     )*
                 > #intermediate_db_map_struct_name #generics {
+
+                 #[allow(unused_parens)]
+                pub fn open_tables_read_only_as_rw_impl(
+                path: std::path::PathBuf,
+                metric_conf: typed_store::rocks::MetricConf,
+                ) -> Self {
+                let p: std::path::PathBuf = tempfile::tempdir()
+                    .expect("Failed to open temporary directory")
+                    .into_path();
+
+                let inner = Self::open_tables_impl(
+                    path,
+                    Some(p),
+                    false,
+                    metric_conf,
+                    None,
+                    None,
+                    false,
+                    );
+                Self {
+                    #(
+                        #field_names: inner.#field_names,
+                    )*
+                    }
+                }
+                
                 /// Opens a set of tables in read-write mode
                 /// If as_secondary_with_path is set, the DB is opened in read only mode with the path specified
                 pub fn open_tables_impl(
@@ -546,6 +589,18 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
                     metric_conf: typed_store::rocks::MetricConf,
                     ) -> #secondary_db_map_struct_name #generics {
                     #secondary_db_map_struct_name::open_tables_read_only(primary_path, with_secondary_path, metric_conf, global_db_options_override)
+                }
+
+                pub fn get_rw_handle_readonly_inner (
+                primary_path: std::path::PathBuf,
+                metric_conf: typed_store::rocks::MetricConf,
+                ) -> Self {
+                let inner = #intermediate_db_map_struct_name::open_tables_read_only_as_rw_impl(primary_path, metric_conf);
+                Self {
+                    #(
+                        #field_names: inner.#field_names,
+                    )*
+                    }
                 }
             }
             #secondary_code

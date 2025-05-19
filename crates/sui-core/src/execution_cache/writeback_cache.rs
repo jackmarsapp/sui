@@ -1315,6 +1315,10 @@ impl WritebackCache {
             );
         }
     }
+
+    pub fn clear(&self) {
+        self.cached.clear();
+    }
 }
 
 impl ExecutionCacheAPI for WritebackCache {}
@@ -2187,6 +2191,19 @@ impl ExecutionCacheWrite for WritebackCache {
 
     fn reload_objects(&self, objects: Vec<(ObjectID, Object)>) {
         self.reload_cached(objects);
+    }
+
+    fn update_underlying(&self, clear_cache: bool) {
+        self.store
+            .perpetual_tables
+            .objects
+            .rocksdb
+            .try_catch_up_with_primary()
+            .unwrap();
+
+        if clear_cache {
+            self.clear();
+        }
     }
 }
 

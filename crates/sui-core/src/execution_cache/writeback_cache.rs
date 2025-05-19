@@ -379,6 +379,17 @@ impl CachedCommittedData {
         }
     }
 
+    fn clear(&self) {
+        self.object_cache.invalidate_all();
+        self.object_by_id_cache.invalidate_all();
+        self.marker_cache.invalidate_all();
+        self.transactions.invalidate_all();
+        self.transaction_effects.invalidate_all();
+        self.transaction_events.invalidate_all();
+        self.executed_effects_digests.invalidate_all();
+        self._transaction_objects.invalidate_all();
+    }
+    
     fn clear_and_assert_empty(&self) {
         self.object_cache.invalidate_all();
         self.object_by_id_cache.invalidate_all();
@@ -2194,10 +2205,10 @@ impl ExecutionCacheWrite for WritebackCache {
     }
 
     fn update_underlying(&self, clear_cache: bool) {
+        use typed_store::Map;
         self.store
             .perpetual_tables
             .objects
-            .rocksdb
             .try_catch_up_with_primary()
             .unwrap();
 

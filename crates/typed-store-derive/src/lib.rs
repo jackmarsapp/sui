@@ -464,7 +464,6 @@ pub fn derive_dbmap_utils_general(input: TokenStream) -> TokenStream {
                 let inner = Self::open_tables_impl(
                     path,
                     Some(p),
-                    false,
                     metric_conf,
                     None,
                     None,

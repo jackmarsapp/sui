@@ -52,15 +52,18 @@ use crate::transaction_outputs::TransactionOutputs;
 
 use dashmap::mapref::entry::Entry as DashMapEntry;
 use dashmap::DashMap;
+use dashmap::DashSet;
 use futures::{future::BoxFuture, FutureExt};
 use moka::sync::SegmentedCache as MokaCache;
 use mysten_common::random_util::randomize_cache_capacity_in_tests;
 use mysten_common::sync::notify_read::NotifyRead;
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashSet};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::hash::Hash;
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use sui_config::ExecutionCacheConfig;
 use sui_macros::fail_point;
 use sui_protocol_config::ProtocolVersion;
@@ -512,7 +515,7 @@ macro_rules! check_cache_entry_by_latest {
                 panic!("empty CachedVersionMap should have been removed");
             }
         }
-        $self.metrics.record_cache_miss($table, $level, Some(&$object_id));
+        $self.record_cache_miss($table, $level, Some(&$object_id));
     };
 }
 

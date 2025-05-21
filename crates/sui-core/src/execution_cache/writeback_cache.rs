@@ -45,6 +45,7 @@ use crate::authority::authority_store_tables::LiveObject;
 use crate::authority::backpressure::BackpressureManager;
 use crate::authority::epoch_start_configuration::{EpochFlag, EpochStartConfiguration};
 use crate::authority::AuthorityStore;
+use crate::cache_update_handler::{pool_related_object_ids, POOL_RELATED_OBJECTS_PATH};
 use crate::fallback_fetch::{do_fallback_lookup, do_fallback_lookup_fallible};
 use crate::global_state_hasher::GlobalStateHashStore;
 use crate::transaction_outputs::TransactionOutputs;
@@ -421,6 +422,37 @@ where
     }
 }
 
+struct PoolRelatedState {
+    related_ids: DashSet<ObjectID>,
+    file_handler: StdMutex<File>,
+}
+
+impl PoolRelatedState {
+    fn new() -> Self {
+        let pool_related_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(POOL_RELATED_OBJECTS_PATH)
+            .expect("Failed to open pool related objects file");
+
+        Self {
+            related_ids: pool_related_object_ids(),
+            file_handler: StdMutex::new(pool_related_file),
+        }
+    }
+
+    fn record_pool_related_id(&self, object_id: &ObjectID) {
+        if !self.related_ids.contains(object_id) {
+            self.related_ids.insert(*object_id);
+            if let Ok(mut file) = self.file_handler.lock() {
+                let _ = writeln!(file, "{}", object_id);
+            }
+        }
+    }
+}
+
+static POOL_RELATED_STATE: OnceLock<PoolRelatedState> = OnceLock::new();
+
 pub struct WritebackCache {
     dirty: UncommittedData,
     cached: CachedCommittedData,
@@ -448,7 +480,7 @@ pub struct WritebackCache {
 }
 
 macro_rules! check_cache_entry_by_version {
-    ($self: ident, $table: expr, $level: expr, $cache: expr, $version: expr) => {
+    ($self: ident, $table: expr, $level: expr, $cache: expr, $version: expr, $object_id: expr) => {
         $self.metrics.record_cache_request($table, $level);
         if let Some(cache) = $cache {
             if let Some(entry) = cache.get(&$version) {
@@ -465,12 +497,12 @@ macro_rules! check_cache_entry_by_version {
                 }
             }
         }
-        $self.metrics.record_cache_miss($table, $level);
+        $self.record_cache_miss($table, $level, Some(&$object_id));
     };
 }
 
 macro_rules! check_cache_entry_by_latest {
-    ($self: ident, $table: expr, $level: expr, $cache: expr) => {
+    ($self: ident, $table: expr, $level: expr, $cache: expr, $object_id: expr) => {
         $self.metrics.record_cache_request($table, $level);
         if let Some(cache) = $cache {
             if let Some((version, entry)) = cache.get_highest() {
@@ -480,7 +512,7 @@ macro_rules! check_cache_entry_by_latest {
                 panic!("empty CachedVersionMap should have been removed");
             }
         }
-        $self.metrics.record_cache_miss($table, $level);
+        $self.metrics.record_cache_miss($table, $level, Some(&$object_id));
     };
 }
 
@@ -661,14 +693,16 @@ impl WritebackCache {
                     "object_by_version",
                     "uncommitted",
                     dirty_entry,
-                    version
+                    version,
+                    object_id
                 );
                 check_cache_entry_by_version!(
                     self,
                     "object_by_version",
                     "committed",
                     cached_entry,
-                    version
+                    version,
+                    object_id
                 );
                 CacheResult::Miss
             },
@@ -755,7 +789,7 @@ impl WritebackCache {
                 }
             }
         } else {
-            self.metrics.record_cache_miss(request_type, "object_by_id");
+            self.record_cache_miss(request_type, "object_by_id", Some(object_id));
         }
 
         Self::with_locked_cache_entries(
@@ -763,8 +797,8 @@ impl WritebackCache {
             &self.cached.object_cache,
             object_id,
             |dirty_entry, cached_entry| {
-                check_cache_entry_by_latest!(self, request_type, "uncommitted", dirty_entry);
-                check_cache_entry_by_latest!(self, request_type, "committed", cached_entry);
+                check_cache_entry_by_latest!(self, request_type, "uncommitted", dirty_entry, object_id);
+                check_cache_entry_by_latest!(self, request_type, "committed", cached_entry, object_id);
                 CacheResult::Miss
             },
         )
@@ -800,14 +834,16 @@ impl WritebackCache {
                     "marker_by_version",
                     "uncommitted",
                     dirty_entry,
-                    object_key.version()
+                    object_key.version(),
+                    object_key.id().id()
                 );
                 check_cache_entry_by_version!(
                     self,
                     "marker_by_version",
                     "committed",
                     cached_entry,
-                    object_key.version()
+                    object_key.version(),
+                    object_key.id().id()
                 );
                 CacheResult::Miss
             },
@@ -824,8 +860,8 @@ impl WritebackCache {
             &self.cached.marker_cache,
             &(epoch_id, object_id),
             |dirty_entry, cached_entry| {
-                check_cache_entry_by_latest!(self, "marker_latest", "uncommitted", dirty_entry);
-                check_cache_entry_by_latest!(self, "marker_latest", "committed", cached_entry);
+                check_cache_entry_by_latest!(self, "marker_latest", "uncommitted", dirty_entry, object_id.id());
+                check_cache_entry_by_latest!(self, "marker_latest", "committed", cached_entry, object_id.id());
                 CacheResult::Miss
             },
         )
@@ -1330,6 +1366,28 @@ impl WritebackCache {
     pub fn clear(&self) {
         self.cached.clear();
     }
+
+
+    fn record_cache_miss(
+        &self,
+        table: &'static str,
+        level: &'static str,
+        object_id: Option<&ObjectID>,
+    ) {
+        self.metrics.record_cache_miss(table, level);
+        if let Some(object_id) = object_id {
+            self.record_pool_related_id(object_id);
+        }
+    }
+
+    fn record_pool_related_id(&self, object_id: &ObjectID) {
+        if self.enable_record_pool_ids {
+            POOL_RELATED_STATE
+                .get_or_init(PoolRelatedState::new)
+                .record_pool_related_id(object_id);
+        }
+    }
+
 }
 
 impl ExecutionCacheAPI for WritebackCache {}

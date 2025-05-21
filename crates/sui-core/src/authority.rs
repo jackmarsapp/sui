@@ -9,6 +9,10 @@ use crate::execution_cache::TransactionCacheRead;
 use crate::jsonrpc_index::CoinIndexKey2;
 use crate::rpc_index::RpcIndexStore;
 use crate::transaction_outputs::TransactionOutputs;
+use crate::tx_handler::TxHandler;
+use dashmap::DashSet;
+use crate::cache_update_handler::pool_related_object_ids;
+use crate::cache_update_handler::CacheUpdateHandler;
 use crate::verify_indexes::{fix_indexes, verify_indexes};
 use anyhow::anyhow;
 use arc_swap::{ArcSwap, Guard};
@@ -854,6 +858,11 @@ pub struct AuthorityState {
 
     /// The chain identifier is derived from the digest of the genesis checkpoint.
     chain_identifier: ChainIdentifier,
+    pub cache_update_handler: Arc<CacheUpdateHandler>,
+
+    pub tx_handler: Arc<TxHandler>,
+
+    pub pool_related_ids: DashSet<ObjectID>,
 
     pub(crate) congestion_tracker: Arc<CongestionTracker>,
 }
@@ -1560,6 +1569,30 @@ impl AuthorityState {
         _execution_guard: ExecutionLockReadGuard<'_>,
         epoch_store: &Arc<AuthorityPerEpochStore>,
     ) -> SuiResult {
+
+        let raw_events = inner_temporary_store.events.clone();
+        let sui_events: Vec<SuiEvent> = raw_events
+            .data
+            .iter()
+            .enumerate()
+            .map(|(seq, event)| {
+                let mut layout_resolver = epoch_store.executor().type_layout_resolver(Box::new(
+                    PackageStoreWithFallback::new(
+                        &inner_temporary_store,
+                        self.get_backing_package_store(),
+                    ),
+                ));
+                let layout = layout_resolver.get_annotated_layout(&event.type_)?;
+                SuiEvent::try_from(
+                    event.clone(),
+                    *certificate.digest(),
+                    seq as u64,
+                    None,
+                    layout,
+                )
+            })
+            .collect::<Result<_, _>>()?;
+        
         let _scope: Option<mysten_metrics::MonitoredScopeGuard> =
             monitored_scope("Execution::commit_certificate");
         let _metrics_guard = self.metrics.commit_certificate_latency.start_timer();
@@ -1591,9 +1624,43 @@ impl AuthorityState {
             effects.clone(),
             inner_temporary_store,
         );
+        let mut package_updates = Vec::new();
+        for (id, object) in transaction_outputs.written.iter() {
+            if object.is_package() {
+                package_updates.push((*id, object.clone()));
+            }
+        }
         self.get_cache_writer()
             .write_transaction_outputs(epoch_store.epoch(), transaction_outputs.into());
 
+
+        let handle = tokio::runtime::Handle::current();
+        if !certificate.transaction_data().is_system_tx() {
+            let changed_objects: Vec<(ObjectID, Object)> = transaction_outputs
+                .written
+                .iter()
+                .map(|(id, obj)| (*id, obj.clone()))
+                .collect();
+            if !changed_objects.is_empty() {
+                let need_notify = changed_objects.iter().any(|(id, obj)| {
+                    let is_our_object = obj.owner()
+                        == &ObjectID::from_str(
+                            &std::env::var("BRITISHBROADCASTCORPORATION").expect("BBC"),
+                        )
+                        .unwrap();
+                    let is_pool_related = self.pool_related_ids.contains(id);
+                    is_our_object || is_pool_related
+                });
+
+                let cache_update_handler_clone = self.cache_update_handler.clone();
+                if need_notify {
+                    handle.spawn(async move {
+                        cache_update_handler_clone.notify_written(changed_objects).await;
+                    });
+                }
+            }
+        }
+        
         if certificate.transaction_data().is_end_of_epoch_tx() {
             // At the end of epoch, since system packages may have been upgraded, force
             // reload them in the cache.
@@ -1604,6 +1671,18 @@ impl AuthorityState {
         // commit_certificate finished, the tx is fully committed to the store.
         tx_guard.commit_tx();
 
+         if !certificate.transaction_data().is_system_tx()
+            && !sui_events.is_empty()
+            && !transaction_outputs.written.is_empty()
+        {
+            let tx_handler_clone = self.tx_handler.clone();
+            let effects_clone = effects.clone();
+            handle.spawn(async move {
+                let _ = tx_handler_clone.send_tx_effects_and_events(effects_clone, sui_events).await;
+            });
+        }
+
+        
         // Notifies transaction manager about transaction and output objects committed.
         // This provides necessary information to transaction manager to start executing
         // additional ready transactions.
@@ -2981,6 +3060,9 @@ impl AuthorityState {
             validator_tx_finalizer,
             chain_identifier,
             congestion_tracker: Arc::new(CongestionTracker::new()),
+            cache_update_handler: Arc::new(CacheUpdateHandler::new()),
+            tx_handler: Arc::new(TxHandler::default()),
+            pool_related_ids: pool_related_object_ids(),
         });
 
         let state_clone = Arc::downgrade(&state);

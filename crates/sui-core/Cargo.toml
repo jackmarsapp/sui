@@ -91,6 +91,7 @@ sui-storage.workspace = true
 sui-tls.workspace = true
 sui-types.workspace = true
 nonempty.workspace = true
+interprocess.workspace = true
 
 [features]
 tide_hunter = ["typed-store/tide_hunter"]

@@ -62,11 +62,11 @@ impl TxHandler {
 
     pub async fn send_tx_effects_and_events(
         &self,
-        effects: &TransactionEffects,
+        effects: TransactionEffects,
         events: Vec<SuiEvent>,
     ) -> Result<()> {
         // Serialize effects and events separately
-        let effects_bytes = bincode::serialize(effects)?;
+        let effects_bytes = bincode::serialize(&effects)?;
         let events_bytes = serde_json::to_vec(&events)?;
 
         // Get lengths as BE bytes

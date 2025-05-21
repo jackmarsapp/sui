@@ -1381,11 +1381,9 @@ impl WritebackCache {
     }
 
     fn record_pool_related_id(&self, object_id: &ObjectID) {
-        if self.enable_record_pool_ids {
-            POOL_RELATED_STATE
+        POOL_RELATED_STATE
                 .get_or_init(PoolRelatedState::new)
                 .record_pool_related_id(object_id);
-        }
     }
 
 }

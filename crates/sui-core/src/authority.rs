@@ -1632,7 +1632,7 @@ impl AuthorityState {
             }
         }
         self.get_cache_writer()
-            .write_transaction_outputs(epoch_store.epoch(), transaction_outputs.into());
+            .write_transaction_outputs(epoch_store.epoch(), Arc::clone(&transaction_outputs));
 
 
         let handle = tokio::runtime::Handle::current();

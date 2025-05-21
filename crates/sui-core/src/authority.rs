@@ -1620,11 +1620,11 @@ impl AuthorityState {
         // Allow testing what happens if we crash here.
         fail_point!("crash");
 
-        let transaction_outputs = TransactionOutputs::build_transaction_outputs(
+        let transaction_outputs = Arc::new(TransactionOutputs::build_transaction_outputs(
             certificate.clone().into_unsigned(),
             effects.clone(),
             inner_temporary_store,
-        );
+        ));
         let mut package_updates = Vec::new();
         for (id, object) in transaction_outputs.written.iter() {
             if object.is_package() {

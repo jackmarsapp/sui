@@ -183,6 +183,7 @@ impl Indexer {
             env!("CARGO_PKG_VERSION")
         );
         let indexer_reader = IndexerReader::new(pool);
+        tokio::spawn(Self::start_batch_test1(indexer_reader.clone()));
         let handle = build_json_rpc_server(registry, indexer_reader, config, cancel)
             .await
             .expect("Json rpc server should not run into errors upon start.");

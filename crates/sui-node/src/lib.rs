@@ -2358,31 +2358,6 @@ async fn build_http_servers(
         http.local_addr()
     );
 
-    // === 新增：支持 Unix Socket 监听 ===
-    let unix_socket_path = "/tmp/sui-jsonrpc.sock"; // 可配置
-    use tokio::net::UnixListener;
-    use tokio_stream::wrappers::UnixListenerStream;
-    use std::path::Path;
-
-    if Path::new(unix_socket_path).exists() {
-        std::fs::remove_file(unix_socket_path)?;
-    }
-    let unix_listener = UnixListener::bind(unix_socket_path)?;
-    let incoming = UnixListenerStream::new(unix_listener);
-
-    // 这里 router 必须实现 Clone，否则可提前构建好 MakeService
-    let unix_router = router.clone();
-
-    tokio::spawn(async move {
-    axum::serve(
-        incoming,
-        unix_router.into_make_service(),
-    )
-    .await
-    .unwrap();
-    });
-    info!("Sui JSON-RPC server (unix socket) listening on {}", unix_socket_path);
-
     Ok((
         HttpServers {
             http: Some(http),
